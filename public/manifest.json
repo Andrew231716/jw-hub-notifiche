@@ -1,0 +1,23 @@
+{
+  "name": "JW Hub Notifiche",
+  "short_name": "JW Hub",
+  "description": "Ricevi notifiche sulle novità pubblicate su jw.org",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#fafaf9",
+  "theme_color": "#44403c",
+  "icons": [
+    {
+      "src": "/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
+}
