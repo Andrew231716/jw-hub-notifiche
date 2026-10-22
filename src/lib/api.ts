@@ -7,19 +7,35 @@ import {
   getCachedUpdates,
   mergeWithCache,
 } from './localStore'
+import { loadPreferences } from './preferences'
 import { supabase, supabaseConfigured } from './supabase'
 import type { FetchLog, FetchResult, JwUpdate } from './types'
+
+function currentLang(): string {
+  try {
+    return loadPreferences().language || 'it'
+  } catch {
+    return 'it'
+  }
+}
 
 async function localGetUpdates(): Promise<{
   updates: JwUpdate[]
   lastFetch: FetchLog | null
 }> {
   try {
-    const res = await fetch('/api/updates')
+    const res = await fetch(`/api/updates?lang=${encodeURIComponent(currentLang())}`)
     if (!res.ok) throw new Error(`HTTP ${res.status}`)
     const data = (await res.json()) as {
       updates: JwUpdate[]
       lastFetch: FetchLog | null
+      error?: string
+    }
+    if (data.error && !data.updates?.length) {
+      const cached = applyReadState(getCachedUpdates())
+      if (cached.length) {
+        return { updates: cached, lastFetch: getCachedLastFetch() }
+      }
     }
     const updates = mergeWithCache(data.updates || [])
     cacheUpdates(updates)
@@ -39,7 +55,7 @@ async function localFetchUpdates(): Promise<
     const res = await fetch('/api/fetch', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ knownUrls }),
+      body: JSON.stringify({ knownUrls, lang: currentLang() }),
     })
     if (!res.ok) {
       return { success: false, newCount: 0, error: `HTTP ${res.status}` }
@@ -53,6 +69,16 @@ async function localFetchUpdates(): Promise<
     }
     return data
   } catch (err) {
+    const cached = applyReadState(getCachedUpdates())
+    if (cached.length) {
+      return {
+        success: true,
+        newCount: 0,
+        error: 'Offline: mostro la cache locale',
+        updates: cached,
+        lastFetch: getCachedLastFetch() || undefined,
+      }
+    }
     return {
       success: false,
       newCount: 0,

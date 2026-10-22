@@ -1,4 +1,5 @@
 import {
+  ArrowUpDown,
   Bell,
   BookOpen,
   Calendar,
@@ -10,10 +11,12 @@ import {
   Music,
   Newspaper,
   RefreshCw,
+  Search,
   Settings,
   X,
 } from 'lucide-react'
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
+import { SettingsPanel } from './components/SettingsPanel'
 import {
   loadUpdates,
   markItemsRead,
@@ -23,10 +26,24 @@ import {
 } from './lib/api'
 import { categoryIcon } from './lib/categories'
 import { formatPublishedDate, formatRelativeTime } from './lib/dates'
+import { listenForInstallPrompt } from './lib/install'
+import {
+  isCategoryEnabled,
+  isInQuietHours,
+  loadPreferences,
+  savePreferences,
+} from './lib/preferences'
+import {
+  pushConfigured,
+  subscribeToPush,
+  syncPushPreferences,
+} from './lib/push'
 import type {
+  AppPreferences,
   FetchLog,
   FilterValue,
   JwUpdate,
+  SortValue,
   ToastMessage,
 } from './lib/types'
 
@@ -60,15 +77,21 @@ function filterUpdates(items: JwUpdate[], filter: FilterValue): JwUpdate[] {
       return items.filter(
         (item) =>
           item.url.includes('/articoli/') ||
-          item.url.includes('/altri-argomenti/'),
+          item.url.includes('/altri-argomenti/') ||
+          item.url.includes('/bible-teachings/'),
       )
     case 'magazines':
-      return items.filter((item) => item.url.includes('/riviste/'))
+      return items.filter(
+        (item) =>
+          item.url.includes('/riviste/') || item.url.includes('/magazines/'),
+      )
     case 'music':
       return items.filter(
         (item) =>
           item.url.includes('/musica/') ||
-          item.category?.toUpperCase().includes('CANZON'),
+          item.url.includes('/music/') ||
+          item.category?.toUpperCase().includes('CANZON') ||
+          item.category?.toUpperCase().includes('SONG'),
       )
     default:
       return items
@@ -81,33 +104,83 @@ export default function App() {
   const [loading, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
   const [filter, setFilter] = useState<FilterValue>('unread')
+  const [sort, setSort] = useState<SortValue>('newest')
+  const [query, setQuery] = useState('')
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [toast, setToast] = useState<ToastMessage | null>(null)
+  const [prefs, setPrefs] = useState<AppPreferences>(() => loadPreferences())
   const [permission, setPermission] = useState<
     NotificationPermission | 'unsupported'
   >(notificationsSupported ? Notification.permission : 'unsupported')
-  const [unreadCount, setUnreadCount] = useState(0)
+  const [pushReady, setPushReady] = useState(false)
+  const [offline, setOffline] = useState(
+    typeof navigator !== 'undefined' ? !navigator.onLine : false,
+  )
 
   const showToast = useCallback((text: string, type: ToastMessage['type']) => {
     setToast({ text, type })
     window.setTimeout(() => setToast(null), 3500)
   }, [])
 
+  const unreadCount = useMemo(
+    () => updates.filter((item) => !item.read).length,
+    [updates],
+  )
+
   const refreshLists = useCallback(async () => {
     const data = await loadUpdates()
     setUpdates(data.updates)
     setLastFetch(data.lastFetch)
-    setUnreadCount(data.updates.filter((item) => !item.read).length)
   }, [])
+
+  const handlePrefsChange = useCallback(
+    (next: AppPreferences) => {
+      const langChanged = next.language !== prefs.language
+      setPrefs(next)
+      savePreferences(next)
+      void syncPushPreferences(next)
+      if (langChanged) {
+        void (async () => {
+          setLoading(true)
+          await triggerFetch()
+          await refreshLists()
+          setLoading(false)
+          showToast('Lingua aggiornata', 'success')
+        })()
+      }
+    },
+    [prefs.language, refreshLists, showToast],
+  )
 
   const handleRefresh = useCallback(async () => {
     setRefreshing(true)
     try {
       const result = await triggerFetch()
       await refreshLists()
-      if (!result.success) {
+      if (!result.success && result.error?.includes('Offline')) {
+        showToast(result.error, 'info')
+      } else if (!result.success) {
         showToast(`Errore: ${result.error}`, 'error')
       } else if (result.newCount > 0) {
+        const fresh = (result.updates || []).filter((u) => !u.read)
+        const notifiable = fresh.filter((u) =>
+          isCategoryEnabled(prefs, u.url, u.category),
+        )
+        if (
+          permission === 'granted' &&
+          !isInQuietHours(prefs) &&
+          prefs.frequency === 'instant' &&
+          notifiable[0]
+        ) {
+          try {
+            new Notification('Nuova novità su jw.org', {
+              body: notifiable[0].title,
+              icon: '/icon-192.png',
+            })
+          } catch {
+            // ignore
+          }
+        }
         showToast(
           result.newCount === 1
             ? '1 nuova novità trovata'
@@ -125,14 +198,13 @@ export default function App() {
     } finally {
       setRefreshing(false)
     }
-  }, [refreshLists, showToast])
+  }, [permission, prefs, refreshLists, showToast])
 
   const markOneRead = useCallback(async (id: string) => {
     await markItemsRead([id])
     setUpdates((prev) =>
       prev.map((item) => (item.id === id ? { ...item, read: true } : item)),
     )
-    setUnreadCount((count) => Math.max(0, count - 1))
   }, [])
 
   const markAllRead = useCallback(async () => {
@@ -140,14 +212,13 @@ export default function App() {
     if (!ids.length) return
     await markItemsRead(ids)
     setUpdates((prev) => prev.map((item) => ({ ...item, read: true })))
-    setUnreadCount(0)
     showToast('Tutte le novità segnate come lette', 'success')
   }, [updates, showToast])
 
   const enableNotifications = useCallback(async () => {
     if (!notificationsSupported) {
       showToast(
-        'Le notifiche del browser non sono disponibili in questo ambiente, ma le novità appariranno comunque in questa dashboard.',
+        'Le notifiche del browser non sono disponibili in questo ambiente.',
         'info',
       )
       return
@@ -155,12 +226,29 @@ export default function App() {
     const next = await Notification.requestPermission()
     setPermission(next)
     if (next === 'granted') {
-      showToast(
-        'Notifiche attivate! Riceverai un avviso per ogni nuova novità.',
-        'success',
-      )
+      if (pushConfigured()) {
+        try {
+          await subscribeToPush(prefs)
+          setPushReady(true)
+          showToast(
+            'Web Push attivo: riceverai avvisi anche a scheda chiusa.',
+            'success',
+          )
+        } catch {
+          showToast(
+            'Notifiche attivate (locale). Web Push non disponibile.',
+            'info',
+          )
+        }
+      } else {
+        showToast(
+          'Notifiche attivate! Riceverai un avviso per ogni nuova novità.',
+          'success',
+        )
+      }
       new Notification('Notifiche attivate', {
         body: 'Riceverai una notifica per ogni nuova novità su jw.org.',
+        icon: '/icon-192.png',
       })
     } else {
       showToast(
@@ -168,7 +256,19 @@ export default function App() {
         'info',
       )
     }
-  }, [showToast])
+  }, [prefs, showToast])
+
+  useEffect(() => {
+    listenForInstallPrompt()
+    const onOnline = () => setOffline(false)
+    const onOffline = () => setOffline(true)
+    window.addEventListener('online', onOnline)
+    window.addEventListener('offline', onOffline)
+    return () => {
+      window.removeEventListener('online', onOnline)
+      window.removeEventListener('offline', onOffline)
+    }
+  }, [])
 
   useEffect(() => {
     ;(async () => {
@@ -177,6 +277,14 @@ export default function App() {
         await refreshLists()
         const result = await triggerFetch()
         if (result.success) await refreshLists()
+        if (pushConfigured() && Notification.permission === 'granted') {
+          try {
+            await subscribeToPush(prefs)
+            setPushReady(true)
+          } catch {
+            setPushReady(false)
+          }
+        }
       } catch (err) {
         showToast(
           `Errore: ${err instanceof Error ? err.message : 'sconosciuto'}`,
@@ -199,12 +307,49 @@ export default function App() {
       window.clearInterval(interval)
       unsubscribe()
     }
-  }, [refreshLists, showToast])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
-  const filtered = filterUpdates(updates, filter)
+  useEffect(() => {
+    if ('setAppBadge' in navigator) {
+      const badge = navigator as Navigator & {
+        setAppBadge?: (n?: number) => Promise<void>
+        clearAppBadge?: () => Promise<void>
+      }
+      if (unreadCount > 0) void badge.setAppBadge?.(unreadCount)
+      else void badge.clearAppBadge?.()
+    }
+  }, [unreadCount])
+
+  const visible = useMemo(() => {
+    let list = filterUpdates(updates, filter)
+    const q = query.trim().toLowerCase()
+    if (q) {
+      list = list.filter(
+        (item) =>
+          item.title.toLowerCase().includes(q) ||
+          item.category?.toLowerCase().includes(q) ||
+          item.description?.toLowerCase().includes(q),
+      )
+    }
+    list = [...list].sort((a, b) => {
+      if (sort === 'title') return a.title.localeCompare(b.title, 'it')
+      const da = `${a.published_date || ''}${a.first_seen_at}`
+      const db = `${b.published_date || ''}${b.first_seen_at}`
+      return sort === 'oldest' ? da.localeCompare(db) : db.localeCompare(da)
+    })
+    return list
+  }, [updates, filter, query, sort])
 
   return (
     <div className="min-h-screen bg-stone-50 text-stone-900">
+      <a
+        href="#main-content"
+        className="sr-only focus:not-sr-only focus:absolute focus:left-4 focus:top-4 focus:z-50 focus:rounded-lg focus:bg-amber-500 focus:px-3 focus:py-2 focus:text-white"
+      >
+        Vai al contenuto
+      </a>
+
       <header className="sticky top-0 z-40 border-b border-stone-200 bg-white/90 backdrop-blur-lg">
         <div className="mx-auto max-w-4xl px-4 py-4 sm:px-6">
           <div className="flex items-center justify-between gap-4">
@@ -227,7 +372,10 @@ export default function App() {
                 <h1 className="text-lg font-bold leading-tight text-stone-900">
                   JW Hub Notifiche
                 </h1>
-                <p className="text-xs text-stone-500">Novità da jw.org</p>
+                <p className="text-xs text-stone-500">
+                  Novità da jw.org · {prefs.language.toUpperCase()}
+                  {offline ? ' · Offline' : ''}
+                </p>
               </div>
             </div>
 
@@ -268,7 +416,19 @@ export default function App() {
         </div>
       </header>
 
-      <main className="mx-auto max-w-4xl px-4 py-6 pb-20 sm:px-6">
+      <main
+        id="main-content"
+        className="mx-auto max-w-4xl px-4 py-6 pb-20 sm:px-6"
+      >
+        {offline && (
+          <div
+            className="mb-4 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900"
+            role="status"
+          >
+            Sei offline. Mostro l’ultima cache disponibile.
+          </div>
+        )}
+
         {permission !== 'granted' && (
           <div className="mb-6 rounded-2xl border border-amber-200 bg-gradient-to-r from-amber-50 to-orange-50 p-4 sm:p-5">
             <div className="flex items-start gap-3">
@@ -283,7 +443,7 @@ export default function App() {
                 </h2>
                 <p className="mt-1 text-sm text-stone-600">
                   {permission === 'unsupported'
-                    ? 'Le notifiche del browser non sono disponibili in questo ambiente, ma tutte le novità appariranno automaticamente in questa dashboard con un badge di avviso.'
+                    ? 'Le notifiche del browser non sono disponibili in questo ambiente, ma tutte le novità appariranno automaticamente in questa dashboard.'
                     : 'Ricevi una notifica ogni volta che viene pubblicato un nuovo contenuto su jw.org.'}
                 </p>
                 {permission !== 'unsupported' && (
@@ -330,8 +490,38 @@ export default function App() {
           </div>
         </div>
 
+        <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center">
+          <label className="relative min-w-0 flex-1">
+            <span className="sr-only">Cerca novità</span>
+            <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-stone-400" />
+            <input
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              placeholder="Cerca titolo o categoria…"
+              className="w-full rounded-xl border border-stone-200 bg-white py-2.5 pl-9 pr-3 text-sm outline-none ring-amber-400 focus:ring-2"
+            />
+          </label>
+          <label className="flex items-center gap-2 text-sm text-stone-600">
+            <ArrowUpDown className="h-4 w-4" />
+            <span className="sr-only">Ordina</span>
+            <select
+              value={sort}
+              onChange={(e) => setSort(e.target.value as SortValue)}
+              className="rounded-lg border border-stone-200 bg-white px-2 py-2 text-sm"
+            >
+              <option value="newest">Più recenti</option>
+              <option value="oldest">Più vecchie</option>
+              <option value="title">Titolo A–Z</option>
+            </select>
+          </label>
+        </div>
+
         <div className="mb-4 flex items-center justify-between gap-3">
-          <div className="flex gap-2 overflow-x-auto pb-1">
+          <div
+            className="flex gap-2 overflow-x-auto pb-1"
+            role="tablist"
+            aria-label="Filtri"
+          >
             {FILTERS.map((item) => {
               const Icon = item.icon
               const active = filter === item.value
@@ -339,6 +529,8 @@ export default function App() {
                 <button
                   key={item.value}
                   type="button"
+                  role="tab"
+                  aria-selected={active}
                   onClick={() => setFilter(item.value)}
                   className={`flex flex-shrink-0 items-center gap-1.5 rounded-full px-3 py-1.5 text-sm font-medium transition-colors ${
                     active
@@ -368,21 +560,23 @@ export default function App() {
             <Loader2 className="mb-3 h-8 w-8 animate-spin" />
             <p className="text-sm">Caricamento novità...</p>
           </div>
-        ) : filtered.length === 0 ? (
+        ) : visible.length === 0 ? (
           <div className="flex flex-col items-center justify-center rounded-2xl border border-dashed border-stone-300 bg-white px-6 py-16 text-center">
             <div className="mb-4 flex h-14 w-14 items-center justify-center rounded-2xl bg-stone-100">
               <Check className="h-8 w-8 text-stone-400" />
             </div>
             <h3 className="font-semibold text-stone-700">Tutto aggiornato</h3>
             <p className="mt-1 max-w-xs text-sm text-stone-500">
-              {filter === 'unread'
-                ? "Non ci sono novità non lette. Premi l'icona di aggiornamento per controllare ora."
-                : 'Nessuna novità in questa categoria.'}
+              {query
+                ? 'Nessun risultato per questa ricerca.'
+                : filter === 'unread'
+                  ? "Non ci sono novità non lette. Premi l'icona di aggiornamento per controllare ora."
+                  : 'Nessuna novità in questa categoria.'}
             </p>
           </div>
         ) : (
           <div className="space-y-3">
-            {filtered.map((item) => {
+            {visible.map((item) => {
               const Icon = categoryIcon(item.category)
               return (
                 <article
@@ -489,119 +683,31 @@ export default function App() {
 
         <footer className="mt-8 text-center">
           <p className="text-xs text-stone-400">
-            I dati vengono controllati automaticamente ogni 15 minuti dal sito
-            pubblico jw.org.
+            Controllo automatico ogni 15 minuti (cron) + refresh manuale.
             <br />
-            Premi l&apos;icona di aggiornamento per un controllo manuale.
-            {!usingSupabase && (
-              <>
-                <br />
-                Modalità locale (API Vite) — configura Supabase per la
-                produzione.
-              </>
-            )}
+            Preferenze, sync e stato letto restano su questo dispositivo
+            {!usingSupabase ? ' (o sul codice sync)' : ' / Supabase'}.
           </p>
         </footer>
       </main>
 
-      {settingsOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
-          <div className="w-full max-w-md rounded-2xl border border-stone-200 bg-white shadow-xl">
-            <div className="flex items-center justify-between border-b border-stone-100 px-5 py-4">
-              <h2 className="text-lg font-bold text-stone-900">Impostazioni</h2>
-              <button
-                type="button"
-                onClick={() => setSettingsOpen(false)}
-                className="flex h-9 w-9 items-center justify-center rounded-lg hover:bg-stone-100"
-                aria-label="Chiudi"
-              >
-                <X className="h-5 w-5 text-stone-500" />
-              </button>
-            </div>
-
-            <div className="space-y-5 px-5 py-5">
-              <div className="rounded-xl border border-stone-200 p-4">
-                <div className="flex items-center gap-3">
-                  <div
-                    className={`flex h-10 w-10 items-center justify-center rounded-lg ${
-                      permission === 'granted' ? 'bg-amber-100' : 'bg-stone-100'
-                    }`}
-                  >
-                    {permission === 'granted' ? (
-                      <Bell className="h-5 w-5 text-amber-600" />
-                    ) : (
-                      <Bell className="h-5 w-5 text-stone-500" />
-                    )}
-                  </div>
-                  <div>
-                    <h3 className="text-sm font-semibold text-stone-900">
-                      Notifiche browser
-                    </h3>
-                    <p className="text-xs text-stone-500">
-                      {permission === 'granted'
-                        ? 'Attive — riceverai notifiche per ogni nuova novità'
-                        : permission === 'denied'
-                          ? 'Bloccate — abilita le notifiche dalle impostazioni del browser'
-                          : permission === 'unsupported'
-                            ? 'Non disponibili in questo ambiente — le novità appariranno nella dashboard'
-                            : 'Non ancora attivate'}
-                    </p>
-                  </div>
-                </div>
-                {permission !== 'granted' &&
-                  permission !== 'denied' &&
-                  permission !== 'unsupported' && (
-                    <button
-                      type="button"
-                      onClick={() => void enableNotifications()}
-                      className="mt-2 w-full rounded-lg bg-amber-500 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-amber-600"
-                    >
-                      Attiva notifiche
-                    </button>
-                  )}
-                {permission === 'denied' && (
-                  <p className="mt-2 flex items-start gap-2 text-xs text-stone-500">
-                    <Info className="mt-0.5 h-4 w-4 flex-shrink-0" />
-                    Vai nelle impostazioni del browser, cerca le autorizzazioni
-                    per questo sito e abilita le notifiche.
-                  </p>
-                )}
-              </div>
-
-              <div>
-                <h3 className="mb-2 text-sm font-semibold text-stone-900">
-                  Informazioni
-                </h3>
-                <ul className="space-y-2 text-sm text-stone-600">
-                  <li className="flex items-start gap-2">
-                    <span className="mt-1.5 h-1.5 w-1.5 flex-shrink-0 rounded-full bg-stone-400" />
-                    Con le notifiche attive, riceverai un avviso nel browser per
-                    ogni novità
-                  </li>
-                  <li className="flex items-start gap-2">
-                    <span className="mt-1.5 h-1.5 w-1.5 flex-shrink-0 rounded-full bg-stone-400" />
-                    Le novità provengono dalla sezione pubblica di jw.org
-                  </li>
-                </ul>
-              </div>
-
-              <a
-                href="https://www.jw.org/it/cosa-nuovo/"
-                target="_blank"
-                rel="noopener noreferrer"
-                className="flex w-full items-center justify-center gap-2 rounded-lg border border-stone-200 px-4 py-2.5 text-sm font-medium text-stone-700 transition-colors hover:bg-stone-50"
-              >
-                <Settings className="h-4 w-4" />
-                Apri jw.org/cosa-nuovo
-                <ExternalLink className="h-3.5 w-3.5" />
-              </a>
-            </div>
-          </div>
-        </div>
-      )}
+      <SettingsPanel
+        open={settingsOpen}
+        onClose={() => setSettingsOpen(false)}
+        prefs={prefs}
+        onPrefsChange={handlePrefsChange}
+        permission={permission}
+        onEnableNotifications={() => void enableNotifications()}
+        onToast={showToast}
+        pushEnabled={pushReady}
+      />
 
       {toast && (
-        <div className="animate-in fixed bottom-6 left-1/2 z-50 -translate-x-1/2">
+        <div
+          className="animate-in fixed bottom-6 left-1/2 z-50 -translate-x-1/2"
+          role="status"
+          aria-live="polite"
+        >
           <div
             className={`flex items-center gap-3 rounded-xl px-4 py-3 shadow-lg ${
               toast.type === 'success'

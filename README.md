@@ -1,42 +1,42 @@
 # JW Hub Notifiche
 
-Riproduzione dell’app [JW Hub Notifiche](https://personal-area-notifi-oo7w.bolt.host/): dashboard che monitora le novità pubbliche di [jw.org/it/cosa-nuovo](https://www.jw.org/it/cosa-nuovo/) e offre notifiche browser, filtri e stato letto/non letto.
+Dashboard per le novità pubbliche di [jw.org](https://www.jw.org) con notifiche browser / Web Push, preferenze e sync tra dispositivi.
 
 - **GitHub:** https://github.com/Andrew231716/jw-hub-notifiche
-- **Live (Vercel):** https://jw-hub-notifiche.vercel.app
+- **Live:** https://jw-hub-notifiche.vercel.app
 
-## Stack
+## Funzionalità
 
-- React + TypeScript + Vite
-- Tailwind CSS v4
-- Lucide icons
-- Modalità locale: API Vite che scrapa jw.org e salva in `server/.data/`
-- Modalità produzione: Supabase (`jw_updates`, `jw_fetch_log`) + edge function `fetch-jw-updates`
+- Feed novità da jw.org (IT/EN/FR/DE/ES/PT)
+- Filtri, ricerca, ordinamento
+- Stato letto/non letto (localStorage)
+- Preferenze: categorie, ore silenziose, frequenza
+- Web Push (service worker + VAPID) + badge app
+- Sync multi-dispositivo tramite codice
+- PWA installabile + cache offline
+- Cron Vercel ogni 15 minuti (`/api/cron`)
+- Storage durable su Vercel Blob (subscription/sync)
 
 ## Avvio locale
 
 ```bash
 npm install
+cp .env.example .env   # inserisci VAPID keys
 npm run dev
 ```
 
-Apri `http://localhost:5173`. Al primo caricamento l’API scarica le novità da jw.org.
+```bash
+npm run test:e2e
+```
 
-## Funzionalità
+## Variabili ambiente
 
-- Banner e CTA per attivare le notifiche del browser
-- Statistiche: non lette / totale / ultimo check
-- Filtri: Non lette, Tutte, Notizie, Articoli, Riviste, Musica
-- Feed con thumbnail, categoria, date relative, segna come letta
-- Pannello Impostazioni
-- Refresh manuale + poll periodico
-- PWA (`manifest.json` + icone)
+Vedi `.env.example`. Su Vercel servono almeno:
 
-## Supabase (opzionale)
+- `VITE_VAPID_PUBLIC_KEY` / `VAPID_PUBLIC_KEY` / `VAPID_PRIVATE_KEY`
+- `BLOB_READ_WRITE_TOKEN` (store collegato al progetto)
+- `CRON_SECRET` (opzionale)
 
-1. Applica `supabase/migrations/001_jw_hub.sql`
-2. Deploy di `supabase/functions/fetch-jw-updates`
-3. Copia `.env.example` in `.env` e imposta URL + anon key
-4. Riavvia `npm run dev`
+## Stack
 
-Con le variabili presenti il frontend usa Supabase al posto dell’API locale.
+React + Vite + Tailwind · PWA (vite-plugin-pwa) · Vercel Serverless + Blob · web-push · Supabase opzionale

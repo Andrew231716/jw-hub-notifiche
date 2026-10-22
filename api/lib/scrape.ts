@@ -1,7 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto'
 
-const JW_URL = 'https://www.jw.org/it/cosa-nuovo/'
-
 export type ParsedItem = {
   url: string
   title: string
@@ -32,6 +30,19 @@ export type FetchLog = {
   error_message: string | null
 }
 
+const LOCALE_PATHS: Record<string, string> = {
+  it: '/it/cosa-nuovo/',
+  en: '/en/whats-new/',
+  fr: '/fr/nouveautes/',
+  de: '/de/neu-auf-unserer-website/',
+  es: '/es/novedades/',
+  pt: '/pt/Novidades/',
+}
+
+export function whatsNewUrl(lang = 'it'): string {
+  return `https://www.jw.org${LOCALE_PATHS[lang] || LOCALE_PATHS.it}`
+}
+
 function absoluteUrl(href: string): string {
   if (href.startsWith('http')) return href
   return `https://www.jw.org${href.startsWith('/') ? '' : '/'}${href}`
@@ -47,11 +58,12 @@ function decodeEntities(text: string): string {
     .replace(/&nbsp;/g, ' ')
 }
 
-export function parseWhatsNewHtml(html: string): ParsedItem[] {
+export function parseWhatsNewHtml(html: string, lang = 'it'): ParsedItem[] {
   const items: ParsedItem[] = []
   const blockRe =
     /<div class="synopsis\s+([^"]*)"[\s\S]*?<\/div>\s*<\/div>/g
   let match: RegExpExecArray | null
+  const skipPath = LOCALE_PATHS[lang] || LOCALE_PATHS.it
 
   while ((match = blockRe.exec(html))) {
     const classes = match[1]
@@ -65,7 +77,7 @@ export function parseWhatsNewHtml(html: string): ParsedItem[] {
 
     const href = titleMatch[1]
     const title = decodeEntities(titleMatch[2].replace(/\s+/g, ' ').trim())
-    if (!title || href.includes('/cosa-nuovo/')) continue
+    if (!title || href.includes(skipPath.replace(/\/$/, ''))) continue
 
     const contextTitle = block.match(
       /<p class="contextTitle">\s*([\s\S]*?)\s*<\/p>/,
@@ -107,12 +119,12 @@ function stableId(url: string): string {
   return `${hash.slice(0, 8)}-${hash.slice(8, 12)}-${hash.slice(12, 16)}-${hash.slice(16, 20)}-${hash.slice(20, 32)}`
 }
 
-export async function fetchWhatsNew(): Promise<{
+export async function fetchWhatsNew(lang = 'it'): Promise<{
   items: ParsedItem[]
   error?: string
 }> {
   try {
-    const res = await fetch(JW_URL, {
+    const res = await fetch(whatsNewUrl(lang), {
       headers: {
         'User-Agent':
           'Mozilla/5.0 (compatible; JWHubNotifiche/1.0; +https://vercel.app)',
@@ -121,7 +133,7 @@ export async function fetchWhatsNew(): Promise<{
     })
     if (!res.ok) return { items: [], error: `HTTP ${res.status}` }
     const html = await res.text()
-    const items = parseWhatsNewHtml(html)
+    const items = parseWhatsNewHtml(html, lang)
     if (!items.length) return { items: [], error: 'No items parsed from page' }
     return { items }
   } catch (err) {
@@ -169,4 +181,30 @@ export function makeFetchLog(
     status,
     error_message: errorMessage,
   }
+}
+
+export function categorizeUrl(
+  url: string,
+  category: string | null,
+): 'news' | 'articles' | 'magazines' | 'music' | 'other' {
+  const cat = category?.toUpperCase() || ''
+  if (cat.includes('NEWS') || url.includes('/news/')) return 'news'
+  if (url.includes('/musica/') || url.includes('/music/') || cat.includes('CANZON') || cat.includes('SONG'))
+    return 'music'
+  if (
+    url.includes('/riviste/') ||
+    url.includes('/magazines/') ||
+    cat.includes('TORRE') ||
+    cat.includes('WATCHTOWER') ||
+    cat.includes('VIGILATE') ||
+    cat.includes('AWAKE')
+  )
+    return 'magazines'
+  if (
+    url.includes('/articoli/') ||
+    url.includes('/bible-teachings/') ||
+    url.includes('/altri-argomenti/')
+  )
+    return 'articles'
+  return 'other'
 }

@@ -1,8 +1,14 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import {
+  fetchWhatsNew,
+  makeFetchLog,
+  toUpdates,
+  type JwUpdate as ApiUpdate,
+  type ParsedItem,
+} from '../api/lib/scrape.ts'
 import type { FetchLog, JwUpdate } from '../src/lib/types.ts'
-import { fetchWhatsNew, makeFetchLog, mergeUpdates } from './scrape.ts'
 
 const root = dirname(fileURLToPath(import.meta.url))
 const dataDir = join(root, '.data')
@@ -44,7 +50,42 @@ export function markRead(ids: string[]): JwUpdate[] {
   return updates
 }
 
-export async function refreshUpdates(): Promise<{
+function mergeUpdates(
+  existing: JwUpdate[],
+  parsed: ParsedItem[],
+): { updates: JwUpdate[]; newCount: number } {
+  const byUrl = new Map(existing.map((item) => [item.url, item]))
+  const { updates: fresh } = toUpdates(
+    parsed,
+    new Set(existing.map((e) => e.url)),
+  )
+  let newCount = 0
+  for (const item of fresh as ApiUpdate[]) {
+    const prev = byUrl.get(item.url)
+    if (prev) {
+      byUrl.set(item.url, {
+        ...prev,
+        title: item.title,
+        category: item.category,
+        published_date: item.published_date,
+        image_url: item.image_url,
+        description: item.description,
+      })
+    } else {
+      newCount += 1
+      byUrl.set(item.url, item as JwUpdate)
+    }
+  }
+  const updates = [...byUrl.values()].sort((a, b) => {
+    const da = a.published_date || ''
+    const db = b.published_date || ''
+    if (da !== db) return db.localeCompare(da)
+    return b.first_seen_at.localeCompare(a.first_seen_at)
+  })
+  return { updates, newCount }
+}
+
+export async function refreshUpdates(lang = 'it'): Promise<{
   success: boolean
   newCount: number
   totalParsed: number
@@ -53,7 +94,7 @@ export async function refreshUpdates(): Promise<{
   log: FetchLog
 }> {
   const existing = getUpdates()
-  const { items, error } = await fetchWhatsNew()
+  const { items, error } = await fetchWhatsNew(lang)
 
   if (error && !items.length) {
     const log = makeFetchLog(0, 'error', error)

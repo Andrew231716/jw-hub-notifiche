@@ -27,6 +27,8 @@ export type FilterValue =
   | 'magazines'
   | 'music'
 
+export type SortValue = 'newest' | 'oldest' | 'title'
+
 export type ToastMessage = {
   type: 'success' | 'error' | 'info'
   text: string
@@ -37,4 +39,31 @@ export type FetchResult = {
   newCount: number
   totalParsed?: number
   error?: string
+  updates?: JwUpdate[]
+  lastFetch?: FetchLog
+}
+
+export type NotifyFrequency = 'instant' | 'hourly' | 'daily'
+
+export type CategoryKey =
+  | 'news'
+  | 'articles'
+  | 'magazines'
+  | 'music'
+  | 'other'
+
+export type AppPreferences = {
+  language: string
+  categories: Record<CategoryKey, boolean>
+  quietHoursEnabled: boolean
+  quietStart: string
+  quietEnd: string
+  frequency: NotifyFrequency
+  syncCode: string | null
+}
+
+export type PushSubscriptionJSON = {
+  endpoint: string
+  expirationTime: number | null
+  keys: { p256dh: string; auth: string }
 }

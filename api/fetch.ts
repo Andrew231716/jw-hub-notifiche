@@ -12,10 +12,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   }
 
   try {
+    const lang = String(req.body?.lang || req.query.lang || 'it')
     const knownUrls = new Set<string>(
       Array.isArray(req.body?.knownUrls) ? req.body.knownUrls : [],
     )
-    const { items, error } = await fetchWhatsNew()
+    const { items, error } = await fetchWhatsNew(lang)
     if (error && !items.length) {
       return res.status(200).json({
         success: false,
