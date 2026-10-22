@@ -210,9 +210,13 @@ export default function App() {
           <div className="flex items-center justify-between gap-4">
             <div className="flex items-center gap-3">
               <div className="relative">
-                <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-gradient-to-br from-stone-800 to-stone-600 shadow-sm">
-                  <Bell className="h-5 w-5 text-amber-200" />
-                </div>
+                <img
+                  src="/favicon.svg"
+                  alt=""
+                  className="h-11 w-11 rounded-xl shadow-sm"
+                  width={44}
+                  height={44}
+                />
                 {unreadCount > 0 && (
                   <span className="absolute -right-1.5 -top-1.5 flex h-5 min-w-5 items-center justify-center rounded-full bg-amber-500 px-1 text-[10px] font-bold text-white ring-2 ring-white">
                     {unreadCount > 9 ? '9+' : unreadCount}
