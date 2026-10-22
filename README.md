@@ -2,6 +2,9 @@
 
 Riproduzione dell’app [JW Hub Notifiche](https://personal-area-notifi-oo7w.bolt.host/): dashboard che monitora le novità pubbliche di [jw.org/it/cosa-nuovo](https://www.jw.org/it/cosa-nuovo/) e offre notifiche browser, filtri e stato letto/non letto.
 
+- **GitHub:** https://github.com/Andrew231716/jw-hub-notifiche
+- **Live (Vercel):** https://jw-hub-notifiche.vercel.app
+
 ## Stack
 
 - React + TypeScript + Vite
