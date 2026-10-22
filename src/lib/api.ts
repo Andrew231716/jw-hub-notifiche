@@ -1,3 +1,12 @@
+import {
+  addReadIds,
+  applyReadState,
+  cacheLastFetch,
+  cacheUpdates,
+  getCachedLastFetch,
+  getCachedUpdates,
+  mergeWithCache,
+} from './localStore'
 import { supabase, supabaseConfigured } from './supabase'
 import type { FetchLog, FetchResult, JwUpdate } from './types'
 
@@ -5,23 +14,70 @@ async function localGetUpdates(): Promise<{
   updates: JwUpdate[]
   lastFetch: FetchLog | null
 }> {
-  const res = await fetch('/api/updates')
-  if (!res.ok) throw new Error(`HTTP ${res.status}`)
-  return res.json()
+  try {
+    const res = await fetch('/api/updates')
+    if (!res.ok) throw new Error(`HTTP ${res.status}`)
+    const data = (await res.json()) as {
+      updates: JwUpdate[]
+      lastFetch: FetchLog | null
+    }
+    const updates = mergeWithCache(data.updates || [])
+    cacheUpdates(updates)
+    if (data.lastFetch) cacheLastFetch(data.lastFetch)
+    return { updates, lastFetch: data.lastFetch || getCachedLastFetch() }
+  } catch {
+    const cached = applyReadState(getCachedUpdates())
+    return { updates: cached, lastFetch: getCachedLastFetch() }
+  }
 }
 
-async function localFetchUpdates(): Promise<FetchResult & { updates?: JwUpdate[]; lastFetch?: FetchLog }> {
-  const res = await fetch('/api/fetch', { method: 'POST' })
-  if (!res.ok) return { success: false, newCount: 0, error: `HTTP ${res.status}` }
-  return res.json()
+async function localFetchUpdates(): Promise<
+  FetchResult & { updates?: JwUpdate[]; lastFetch?: FetchLog }
+> {
+  const knownUrls = getCachedUpdates().map((item) => item.url)
+  try {
+    const res = await fetch('/api/fetch', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ knownUrls }),
+    })
+    if (!res.ok) {
+      return { success: false, newCount: 0, error: `HTTP ${res.status}` }
+    }
+    const data = await res.json()
+    if (data.updates) {
+      const updates = mergeWithCache(data.updates as JwUpdate[])
+      cacheUpdates(updates)
+      if (data.lastFetch) cacheLastFetch(data.lastFetch)
+      return { ...data, updates }
+    }
+    return data
+  } catch (err) {
+    return {
+      success: false,
+      newCount: 0,
+      error: err instanceof Error ? err.message : 'Network error',
+    }
+  }
 }
 
 async function localMarkRead(ids: string[]): Promise<void> {
-  await fetch('/api/mark-read', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ ids }),
-  })
+  addReadIds(ids)
+  const cached = applyReadState(
+    getCachedUpdates().map((item) =>
+      ids.includes(item.id) ? { ...item, read: true } : item,
+    ),
+  )
+  cacheUpdates(cached)
+  try {
+    await fetch('/api/mark-read', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ids }),
+    })
+  } catch {
+    // localStorage already updated
+  }
 }
 
 async function supabaseGetUpdates(): Promise<{
