@@ -683,7 +683,7 @@ export default function App() {
 
         <footer className="mt-8 text-center">
           <p className="text-xs text-stone-400">
-            Controllo automatico ogni 15 minuti (cron) + refresh manuale.
+            Controllo automatico giornaliero (cron Hobby) + refresh manuale.
             <br />
             Preferenze, sync e stato letto restano su questo dispositivo
             {!usingSupabase ? ' (o sul codice sync)' : ' / Supabase'}.
