@@ -26,6 +26,7 @@ export type FilterValue =
   | 'articles'
   | 'magazines'
   | 'music'
+  | 'video'
 
 export type SortValue = 'newest' | 'oldest' | 'title'
 
@@ -50,6 +51,7 @@ export type CategoryKey =
   | 'articles'
   | 'magazines'
   | 'music'
+  | 'video'
   | 'other'
 
 export type AppPreferences = {

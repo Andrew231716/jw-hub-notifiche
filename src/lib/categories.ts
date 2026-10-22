@@ -4,6 +4,7 @@ import {
   type LucideIcon,
   Music,
   Newspaper,
+  Video,
 } from 'lucide-react'
 
 const CATEGORY_ICONS: Record<string, LucideIcon> = {
@@ -14,7 +15,10 @@ const CATEGORY_ICONS: Record<string, LucideIcon> = {
   SVEGLIATEVI: BookOpen,
   'VIGILATE!': BookOpen,
   CANZONI: Music,
-  VIDEO: Newspaper,
+  VIDEO: Video,
+  VIDEOS: Video,
+  VIDÉOS: Video,
+  VÍDEOS: Video,
   'DOMANDE FREQUENTI': HelpCircle,
   'DOMANDE DAI LETTORI': HelpCircle,
   BIOGRAFIE: BookOpen,

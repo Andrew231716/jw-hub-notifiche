@@ -121,6 +121,7 @@ export function jwHubApiPlugin(): Plugin {
                 articles: true,
                 magazines: true,
                 music: true,
+                video: true,
                 other: true,
               },
               quietHoursEnabled: Boolean(body.quietHoursEnabled),

@@ -13,6 +13,7 @@ import {
   RefreshCw,
   Search,
   Settings,
+  Video,
   X,
 } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useState } from 'react'
@@ -58,6 +59,7 @@ const FILTERS: {
   { value: 'articles', label: 'Articoli', icon: BookOpen },
   { value: 'magazines', label: 'Riviste', icon: BookOpen },
   { value: 'music', label: 'Musica', icon: Music },
+  { value: 'video', label: 'Video', icon: Video },
 ]
 
 const notificationsSupported =
@@ -93,6 +95,18 @@ function filterUpdates(items: JwUpdate[], filter: FilterValue): JwUpdate[] {
           item.category?.toUpperCase().includes('CANZON') ||
           item.category?.toUpperCase().includes('SONG'),
       )
+    case 'video':
+      return items.filter((item) => {
+        const cat = item.category?.toUpperCase() || ''
+        return (
+          cat.includes('VIDEO') ||
+          cat.includes('VIDÉO') ||
+          cat.includes('VÍDEO') ||
+          item.url.includes('/biblioteca-digitale/video/') ||
+          item.url.includes('/library/videos/') ||
+          (item.url.includes('lank=') && item.url.includes('VIDEO'))
+        )
+      })
     default:
       return items
   }

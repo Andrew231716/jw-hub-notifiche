@@ -10,6 +10,7 @@ export const DEFAULT_PREFS: AppPreferences = {
     articles: true,
     magazines: true,
     music: true,
+    video: true,
     other: true,
   },
   quietHoursEnabled: false,
@@ -24,6 +25,7 @@ export const CATEGORY_LABELS: Record<CategoryKey, string> = {
   articles: 'Articoli',
   magazines: 'Riviste',
   music: 'Musica',
+  video: 'Video',
   other: 'Altro',
 }
 
@@ -76,6 +78,15 @@ export function categorizeUrl(
   category: string | null,
 ): CategoryKey {
   const cat = category?.toUpperCase() || ''
+  if (
+    cat.includes('VIDEO') ||
+    cat.includes('VIDÉO') ||
+    cat.includes('VÍDEO') ||
+    url.includes('/biblioteca-digitale/video/') ||
+    url.includes('/library/videos/') ||
+    (url.includes('lank=') && url.includes('VIDEO'))
+  )
+    return 'video'
   if (cat.includes('NEWS') || url.includes('/news/')) return 'news'
   if (url.includes('/musica/') || cat.includes('CANZON')) return 'music'
   if (url.includes('/riviste/') || cat.includes('TORRE') || cat.includes('VIGILATE') || cat.includes('SVEGLIA'))

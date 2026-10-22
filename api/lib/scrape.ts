@@ -39,8 +39,101 @@ const LOCALE_PATHS: Record<string, string> = {
   pt: '/pt/Novidades/',
 }
 
+/** JW Mediator language letter codes */
+const MEDIATOR_LANG: Record<string, string> = {
+  it: 'I',
+  en: 'E',
+  fr: 'F',
+  de: 'X',
+  es: 'S',
+  pt: 'T',
+}
+
+const VIDEO_CATEGORY_LABEL: Record<string, string> = {
+  it: 'VIDEO',
+  en: 'VIDEOS',
+  fr: 'VIDÉOS',
+  de: 'VIDEOS',
+  es: 'VIDEOS',
+  pt: 'VÍDEOS',
+}
+
 export function whatsNewUrl(lang = 'it'): string {
   return `https://www.jw.org${LOCALE_PATHS[lang] || LOCALE_PATHS.it}`
+}
+
+function mediatorLang(lang = 'it'): string {
+  return MEDIATOR_LANG[lang] || 'I'
+}
+
+function videoShareUrl(lang: string, languageAgnosticKey: string): string {
+  const wt = mediatorLang(lang)
+  return `https://www.jw.org/finder?srcid=jwlshare&wtlocale=${wt}&lank=${encodeURIComponent(languageAgnosticKey)}`
+}
+
+function pickVideoImage(images: Record<string, Record<string, string>> | undefined): string | null {
+  if (!images) return null
+  return (
+    images.sqr?.lg ||
+    images.wss?.sm ||
+    images.wss?.lg ||
+    images.pnr?.lg ||
+    images.lsr?.xl ||
+    images.lss?.lg ||
+    null
+  )
+}
+
+type MediatorMedia = {
+  guid?: string
+  languageAgnosticNaturalKey?: string
+  naturalKey?: string
+  type?: string
+  title?: string
+  description?: string
+  firstPublished?: string
+  durationFormattedMinSec?: string
+  images?: Record<string, Record<string, string>>
+}
+
+export async function fetchLatestVideos(lang = 'it'): Promise<ParsedItem[]> {
+  const code = mediatorLang(lang)
+  const url = `https://b.jw-cdn.org/apis/mediator/v1/categories/${code}/LatestVideos?detailed=1&clientType=www`
+  try {
+    const res = await fetch(url, {
+      headers: {
+        Accept: 'application/json',
+        'User-Agent':
+          'Mozilla/5.0 (compatible; JWHubNotifiche/1.0; +https://vercel.app)',
+      },
+    })
+    if (!res.ok) return []
+    const data = (await res.json()) as {
+      category?: { media?: MediatorMedia[] }
+    }
+    const media = data.category?.media || []
+    const label = VIDEO_CATEGORY_LABEL[lang] || 'VIDEO'
+    return media
+      .filter((m) => m.type === 'video' && m.title && m.languageAgnosticNaturalKey)
+      .map((m) => {
+        const published = m.firstPublished
+          ? m.firstPublished.slice(0, 10)
+          : null
+        const duration = m.durationFormattedMinSec
+          ? ` · ${m.durationFormattedMinSec}`
+          : ''
+        return {
+          url: videoShareUrl(lang, m.languageAgnosticNaturalKey!),
+          title: m.title!,
+          category: label,
+          published_date: published,
+          image_url: pickVideoImage(m.images),
+          description: (m.description || '').trim() || `Video${duration}`,
+        }
+      })
+  } catch {
+    return []
+  }
 }
 
 function absoluteUrl(href: string): string {
@@ -124,18 +217,39 @@ export async function fetchWhatsNew(lang = 'it'): Promise<{
   error?: string
 }> {
   try {
-    const res = await fetch(whatsNewUrl(lang), {
-      headers: {
-        'User-Agent':
-          'Mozilla/5.0 (compatible; JWHubNotifiche/1.0; +https://vercel.app)',
-        Accept: 'text/html',
-      },
-    })
-    if (!res.ok) return { items: [], error: `HTTP ${res.status}` }
-    const html = await res.text()
-    const items = parseWhatsNewHtml(html, lang)
-    if (!items.length) return { items: [], error: 'No items parsed from page' }
-    return { items }
+    const [pageRes, videos] = await Promise.all([
+      fetch(whatsNewUrl(lang), {
+        headers: {
+          'User-Agent':
+            'Mozilla/5.0 (compatible; JWHubNotifiche/1.0; +https://vercel.app)',
+          Accept: 'text/html',
+        },
+      }),
+      fetchLatestVideos(lang),
+    ])
+
+    let pageItems: ParsedItem[] = []
+    let pageError: string | undefined
+    if (!pageRes.ok) {
+      pageError = `HTTP ${pageRes.status}`
+    } else {
+      const html = await pageRes.text()
+      pageItems = parseWhatsNewHtml(html, lang)
+      if (!pageItems.length) pageError = 'No items parsed from page'
+    }
+
+    const byUrl = new Map<string, ParsedItem>()
+    for (const item of [...pageItems, ...videos]) {
+      if (!byUrl.has(item.url)) byUrl.set(item.url, item)
+    }
+    const items = [...byUrl.values()].sort((a, b) =>
+      (b.published_date || '').localeCompare(a.published_date || ''),
+    )
+
+    if (!items.length) {
+      return { items: [], error: pageError || 'No items parsed' }
+    }
+    return { items, error: pageError }
   } catch (err) {
     return {
       items: [],
@@ -186,10 +300,25 @@ export function makeFetchLog(
 export function categorizeUrl(
   url: string,
   category: string | null,
-): 'news' | 'articles' | 'magazines' | 'music' | 'other' {
+): 'news' | 'articles' | 'magazines' | 'music' | 'video' | 'other' {
   const cat = category?.toUpperCase() || ''
+  if (
+    cat.includes('VIDEO') ||
+    cat.includes('VIDÉO') ||
+    cat.includes('VÍDEO') ||
+    url.includes('/biblioteca-digitale/video/') ||
+    url.includes('/library/videos/') ||
+    (url.includes('lank=') && url.includes('VIDEO')) ||
+    (url.includes('finder?') && url.includes('VIDEO'))
+  )
+    return 'video'
   if (cat.includes('NEWS') || url.includes('/news/')) return 'news'
-  if (url.includes('/musica/') || url.includes('/music/') || cat.includes('CANZON') || cat.includes('SONG'))
+  if (
+    url.includes('/musica/') ||
+    url.includes('/music/') ||
+    cat.includes('CANZON') ||
+    cat.includes('SONG')
+  )
     return 'music'
   if (
     url.includes('/riviste/') ||
