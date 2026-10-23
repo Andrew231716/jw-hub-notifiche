@@ -5,6 +5,10 @@ import {
   cacheUpdates,
   getCachedLastFetch,
   getCachedUpdates,
+  getNotifiedUrls,
+  getSeenUrls,
+  markUrlsNotified,
+  markUrlsSeen,
   mergeWithCache,
 } from './localStore'
 import { loadPreferences } from './preferences'
@@ -39,6 +43,8 @@ async function localGetUpdates(): Promise<{
     }
     const updates = mergeWithCache(data.updates || [])
     cacheUpdates(updates)
+    // Baseline: current catalogue is "already seen" so it won't trigger alerts.
+    markUrlsSeen(updates.map((u) => u.url))
     if (data.lastFetch) cacheLastFetch(data.lastFetch)
     return { updates, lastFetch: data.lastFetch || getCachedLastFetch() }
   } catch {
@@ -48,9 +54,10 @@ async function localGetUpdates(): Promise<{
 }
 
 async function localFetchUpdates(): Promise<
-  FetchResult & { updates?: JwUpdate[]; lastFetch?: FetchLog }
+  FetchResult & { updates?: JwUpdate[]; newItems?: JwUpdate[]; lastFetch?: FetchLog }
 > {
-  const knownUrls = getCachedUpdates().map((item) => item.url)
+  const knownUrls = [...getSeenUrls()]
+  const isBaseline = knownUrls.length === 0
   try {
     const res = await fetch('/api/fetch', {
       method: 'POST',
@@ -61,13 +68,24 @@ async function localFetchUpdates(): Promise<
       return { success: false, newCount: 0, error: `HTTP ${res.status}` }
     }
     const data = await res.json()
-    if (data.updates) {
-      const updates = mergeWithCache(data.updates as JwUpdate[])
-      cacheUpdates(updates)
-      if (data.lastFetch) cacheLastFetch(data.lastFetch)
-      return { ...data, updates }
+    const remote = (data.updates || []) as JwUpdate[]
+    const knownSet = new Set(knownUrls)
+    const genuinelyNew = isBaseline
+      ? []
+      : remote.filter((item) => !knownSet.has(item.url))
+
+    const updates = mergeWithCache(remote)
+    cacheUpdates(updates)
+    markUrlsSeen(updates.map((u) => u.url))
+    if (data.lastFetch) cacheLastFetch(data.lastFetch)
+
+    return {
+      ...data,
+      success: true,
+      newCount: genuinelyNew.length,
+      updates,
+      newItems: genuinelyNew,
     }
-    return data
   } catch (err) {
     const cached = applyReadState(getCachedUpdates())
     if (cached.length) {
@@ -76,6 +94,7 @@ async function localFetchUpdates(): Promise<
         newCount: 0,
         error: 'Offline: mostro la cache locale',
         updates: cached,
+        newItems: [],
         lastFetch: getCachedLastFetch() || undefined,
       }
     }
@@ -180,6 +199,14 @@ export async function triggerFetch(): Promise<FetchResult> {
 export async function markItemsRead(ids: string[]): Promise<void> {
   if (!ids.length) return
   return usingSupabase ? supabaseMarkRead(ids) : localMarkRead(ids)
+}
+
+/** Notify only for brand-new items not already alerted on this device. */
+export function takeNotifiableNewItems(newItems: JwUpdate[]): JwUpdate[] {
+  const already = getNotifiedUrls()
+  const fresh = newItems.filter((item) => !already.has(item.url))
+  if (fresh.length) markUrlsNotified(fresh.map((item) => item.url))
+  return fresh
 }
 
 export function subscribeToInserts(onInsert: () => void): () => void {

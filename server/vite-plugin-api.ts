@@ -82,15 +82,19 @@ export function jwHubApiPlugin(): Plugin {
               })
             }
             const { updates, newCount } = toUpdates(items, known)
+            const genuinelyNew = known.size
+              ? updates.filter((u) => !known.has(u.url))
+              : []
             // keep file store in sync for local mark-read
             await refreshUpdates(lang)
             return sendJson(res, 200, {
               success: true,
-              newCount: known.size ? newCount : 0,
+              newCount: genuinelyNew.length,
               totalParsed: items.length,
               updates,
+              newItems: genuinelyNew,
               lastFetch: makeFetchLog(
-                known.size ? newCount : updates.length,
+                known.size ? newCount : 0,
                 'success',
                 null,
               ),

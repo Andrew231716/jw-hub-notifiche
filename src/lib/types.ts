@@ -41,6 +41,7 @@ export type FetchResult = {
   totalParsed?: number
   error?: string
   updates?: JwUpdate[]
+  newItems?: JwUpdate[]
   lastFetch?: FetchLog
 }
 

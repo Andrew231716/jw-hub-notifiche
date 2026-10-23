@@ -29,13 +29,17 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     }
 
     const { updates, newCount } = toUpdates(items, knownUrls)
+    const genuinelyNew = knownUrls.size
+      ? updates.filter((u) => !knownUrls.has(u.url))
+      : []
     return res.status(200).json({
       success: true,
-      newCount: knownUrls.size ? newCount : 0,
+      newCount: genuinelyNew.length,
       totalParsed: items.length,
       updates,
+      newItems: genuinelyNew,
       lastFetch: makeFetchLog(
-        knownUrls.size ? newCount : updates.length,
+        knownUrls.size ? newCount : 0,
         'success',
         null,
       ),

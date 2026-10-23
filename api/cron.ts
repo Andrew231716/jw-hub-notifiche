@@ -1,10 +1,6 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node'
 import webpush from 'web-push'
-import {
-  categorizeUrl,
-  fetchWhatsNew,
-  toUpdates,
-} from './lib/scrape.js'
+import { categorizeUrl, fetchWhatsNew } from './lib/scrape.js'
 import {
   getLastDigestAt,
   getSeenUrls,
@@ -22,8 +18,7 @@ function parseHm(value: string): number {
 
 function inQuietHours(sub: StoredSubscription, now = new Date()): boolean {
   if (!sub.quietHoursEnabled) return false
-  const mins = now.getUTCHours() * 60 + now.getUTCMinutes()
-  // Use local-ish: subscribers are mostly EU; keep simple local server UTC check + client also filters
+  const mins = now.getHours() * 60 + now.getMinutes()
   const start = parseHm(sub.quietStart)
   const end = parseHm(sub.quietEnd)
   if (start === end) return false
@@ -31,9 +26,12 @@ function inQuietHours(sub: StoredSubscription, now = new Date()): boolean {
   return mins >= start || mins < end
 }
 
-function shouldSendDigest(sub: StoredSubscription, lastDigest?: string): boolean {
+function shouldSendDigest(
+  sub: StoredSubscription,
+  lastDigest?: string,
+): boolean {
   if (sub.frequency === 'instant') return true
-  if (!lastDigest) return true
+  if (!lastDigest) return false
   const elapsed = Date.now() - new Date(lastDigest).getTime()
   if (sub.frequency === 'hourly') return elapsed >= 60 * 60 * 1000
   if (sub.frequency === 'daily') return elapsed >= 24 * 60 * 60 * 1000
@@ -56,25 +54,38 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   }
   webpush.setVapidDetails(subject, publicKey, privateKey)
 
-  const langs = [...new Set((await listSubscriptions()).map((s) => s.language || 'it'))]
+  const langs = [
+    ...new Set((await listSubscriptions()).map((s) => s.language || 'it')),
+  ]
   if (!langs.length) langs.push('it')
 
   let pushed = 0
   let errors = 0
+  let seeded = 0
   const lastDigest = await getLastDigestAt()
 
   for (const lang of langs) {
-    const { items, error } = await fetchWhatsNew(lang)
-    if (error || !items.length) continue
+    const { items } = await fetchWhatsNew(lang)
+    if (!items.length) continue
 
-    const seen = new Set(await getSeenUrls(lang))
-    const { updates, newCount } = toUpdates(items, seen)
     const allUrls = items.map((i) => i.url)
+    const seen = new Set(await getSeenUrls(lang))
+
+    // First run (or empty baseline): remember everything, do NOT notify.
+    if (seen.size === 0) {
+      await setSeenUrls(lang, allUrls)
+      seeded += allUrls.length
+      continue
+    }
+
+    const fresh = items.filter((item) => !seen.has(item.url))
     await setSeenUrls(lang, [...new Set([...seen, ...allUrls])])
 
-    if (!newCount) continue
-    const fresh = updates.filter((u) => !seen.has(u.url))
-    const subs = (await listSubscriptions()).filter((s) => (s.language || 'it') === lang)
+    if (!fresh.length) continue
+
+    const subs = (await listSubscriptions()).filter(
+      (s) => (s.language || 'it') === lang,
+    )
 
     for (const sub of subs) {
       if (inQuietHours(sub)) continue
@@ -92,7 +103,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
               title: 'Nuova novità su jw.org',
               body: matched[0].title,
               url: matched[0].url,
-              tag: matched[0].id,
+              tag: matched[0].url,
             }
           : {
               title: 'JW Hub Notifiche',
@@ -101,7 +112,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
                   ? matched[0].title
                   : `${matched.length} nuove novità su jw.org`,
               url: '/',
-              tag: `digest-${lang}-${Date.now()}`,
+              tag: `digest-${lang}-${matched.map((m) => m.url).join('|').slice(0, 120)}`,
             }
 
       try {
@@ -121,5 +132,5 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   }
 
   await setLastDigestAt(new Date().toISOString())
-  return res.status(200).json({ ok: true, pushed, errors, langs })
+  return res.status(200).json({ ok: true, pushed, errors, seeded, langs })
 }

@@ -22,9 +22,11 @@ import {
   loadUpdates,
   markItemsRead,
   subscribeToInserts,
+  takeNotifiableNewItems,
   triggerFetch,
   usingSupabase,
 } from './lib/api'
+import { clearUpdatesCache, markUrlsSeen } from './lib/localStore'
 import { categoryIcon } from './lib/categories'
 import { formatPublishedDate, formatRelativeTime } from './lib/dates'
 import { listenForInstallPrompt } from './lib/install'
@@ -156,7 +158,10 @@ export default function App() {
       if (langChanged) {
         void (async () => {
           setLoading(true)
-          await triggerFetch()
+          clearUpdatesCache()
+          const result = await triggerFetch()
+          // Baseline new language catalogue — no alerts for existing items.
+          markUrlsSeen((result.updates || []).map((u) => u.url), next.language)
           await refreshLists()
           setLoading(false)
           showToast('Lingua aggiornata', 'success')
@@ -175,34 +180,42 @@ export default function App() {
         showToast(result.error, 'info')
       } else if (!result.success) {
         showToast(`Errore: ${result.error}`, 'error')
-      } else if (result.newCount > 0) {
-        const fresh = (result.updates || []).filter((u) => !u.read)
-        const notifiable = fresh.filter((u) =>
-          isCategoryEnabled(prefs, u.url, u.category),
+      } else {
+        const brandNew = takeNotifiableNewItems(result.newItems || []).filter(
+          (u) => isCategoryEnabled(prefs, u.url, u.category),
         )
         if (
+          brandNew.length &&
           permission === 'granted' &&
           !isInQuietHours(prefs) &&
-          prefs.frequency === 'instant' &&
-          notifiable[0]
+          prefs.frequency === 'instant'
         ) {
           try {
-            new Notification('Nuova novità su jw.org', {
-              body: notifiable[0].title,
-              icon: '/icon-192.png',
-            })
+            const first = brandNew[0]
+            new Notification(
+              brandNew.length === 1
+                ? 'Nuova novità su jw.org'
+                : `${brandNew.length} nuove novità su jw.org`,
+              {
+                body: first.title,
+                icon: '/icon-192.png',
+                tag: first.id,
+              },
+            )
           } catch {
             // ignore
           }
         }
-        showToast(
-          result.newCount === 1
-            ? '1 nuova novità trovata'
-            : `${result.newCount} nuove novità trovate`,
-          'success',
-        )
-      } else {
-        showToast('Nessuna nuova novità. Controllo completato.', 'info')
+        if (brandNew.length > 0) {
+          showToast(
+            brandNew.length === 1
+              ? '1 nuova novità trovata'
+              : `${brandNew.length} nuove novità trovate`,
+            'success',
+          )
+        } else {
+          showToast('Nessuna nuova novità. Controllo completato.', 'info')
+        }
       }
     } catch (err) {
       showToast(
