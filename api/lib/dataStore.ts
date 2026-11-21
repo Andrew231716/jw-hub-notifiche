@@ -20,6 +20,8 @@ export type StoredSubscription = {
   quietStart: string
   quietEnd: string
   frequency: 'instant' | 'hourly' | 'daily'
+  /** URLs the user already read — never push these again for this device. */
+  readUrls: string[]
   updatedAt: string
 }
 
@@ -110,9 +112,47 @@ export async function upsertSubscription(
 ): Promise<void> {
   const data = await loadData()
   const idx = data.subscriptions.findIndex((s) => s.endpoint === row.endpoint)
-  if (idx >= 0) data.subscriptions[idx] = row
-  else data.subscriptions.push(row)
+  if (idx >= 0) {
+    const prev = data.subscriptions[idx]
+    data.subscriptions[idx] = {
+      ...row,
+      readUrls: [
+        ...new Set([...(prev.readUrls || []), ...(row.readUrls || [])]),
+      ].slice(-800),
+    }
+  } else {
+    data.subscriptions.push({
+      ...row,
+      readUrls: [...new Set(row.readUrls || [])].slice(-800),
+    })
+  }
   await saveData(data)
+}
+
+/** Append read URLs for a device (and/or specific push endpoint). */
+export async function appendReadUrls(opts: {
+  deviceId?: string
+  endpoint?: string
+  urls: string[]
+}): Promise<number> {
+  if (!opts.urls.length) return 0
+  const data = await loadData()
+  let updated = 0
+  data.subscriptions = data.subscriptions.map((sub) => {
+    const matchDevice = opts.deviceId && sub.deviceId === opts.deviceId
+    const matchEndpoint = opts.endpoint && sub.endpoint === opts.endpoint
+    if (!matchDevice && !matchEndpoint) return sub
+    updated += 1
+    return {
+      ...sub,
+      readUrls: [...new Set([...(sub.readUrls || []), ...opts.urls])].slice(
+        -800,
+      ),
+      updatedAt: new Date().toISOString(),
+    }
+  })
+  if (updated) await saveData(data)
+  return updated
 }
 
 export async function removeSubscription(endpoint: string): Promise<void> {

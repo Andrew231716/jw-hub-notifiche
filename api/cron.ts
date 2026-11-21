@@ -62,6 +62,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   let pushed = 0
   let errors = 0
   let seeded = 0
+  let skippedRead = 0
   const lastDigest = await getLastDigestAt()
 
   for (const lang of langs) {
@@ -91,7 +92,12 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       if (inQuietHours(sub)) continue
       if (!shouldSendDigest(sub, lastDigest)) continue
 
+      const readSet = new Set(sub.readUrls || [])
       const matched = fresh.filter((u) => {
+        if (readSet.has(u.url)) {
+          skippedRead += 1
+          return false
+        }
         const key = categorizeUrl(u.url, u.category)
         return sub.categories?.[key] !== false
       })
@@ -112,7 +118,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
                   ? matched[0].title
                   : `${matched.length} nuove novità su jw.org`,
               url: '/',
-              tag: `digest-${lang}-${matched.map((m) => m.url).join('|').slice(0, 120)}`,
+              tag: `digest-${lang}-${matched
+                .map((m) => m.url)
+                .join('|')
+                .slice(0, 120)}`,
             }
 
       try {
@@ -132,5 +141,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   }
 
   await setLastDigestAt(new Date().toISOString())
-  return res.status(200).json({ ok: true, pushed, errors, seeded, langs })
+  return res
+    .status(200)
+    .json({ ok: true, pushed, errors, seeded, skippedRead, langs })
 }

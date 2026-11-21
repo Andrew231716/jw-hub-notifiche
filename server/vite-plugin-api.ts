@@ -1,5 +1,6 @@
 import type { Plugin } from 'vite'
 import {
+  appendReadUrls,
   getSync,
   listSubscriptions,
   removeSubscription,
@@ -103,10 +104,24 @@ export function jwHubApiPlugin(): Plugin {
 
           if (url === '/api/mark-read' && req.method === 'POST') {
             const raw = await readBody(req)
-            const body = JSON.parse(raw || '{}') as { ids?: string[] }
+            const body = JSON.parse(raw || '{}') as {
+              ids?: string[]
+              urls?: string[]
+              deviceId?: string
+              endpoint?: string
+            }
             const ids = Array.isArray(body.ids) ? body.ids : []
-            const updates = markRead(ids)
-            return sendJson(res, 200, { updates })
+            const urls = Array.isArray(body.urls) ? body.urls : []
+            const updates = ids.length ? markRead(ids) : getUpdates()
+            let synced = 0
+            if (urls.length && (body.deviceId || body.endpoint)) {
+              synced = await appendReadUrls({
+                deviceId: body.deviceId,
+                endpoint: body.endpoint,
+                urls,
+              })
+            }
+            return sendJson(res, 200, { updates, synced, ok: true })
           }
 
           if (url === '/api/push/subscribe' && req.method === 'POST') {
@@ -135,6 +150,7 @@ export function jwHubApiPlugin(): Plugin {
                 body.frequency === 'hourly' || body.frequency === 'daily'
                   ? body.frequency
                   : 'instant',
+              readUrls: Array.isArray(body.readUrls) ? body.readUrls : [],
               updatedAt: new Date().toISOString(),
             })
             return sendJson(res, 200, { ok: true })

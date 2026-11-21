@@ -1,4 +1,5 @@
 import type { AppPreferences, PushSubscriptionJSON } from './types'
+import { getCachedUpdates, getReadUrls } from './localStore'
 import { getDeviceId } from './preferences'
 
 const VAPID_PUBLIC = import.meta.env.VITE_VAPID_PUBLIC_KEY as string | undefined
@@ -21,6 +22,35 @@ export function pushConfigured(): boolean {
   )
 }
 
+function currentReadUrls(lang: string): string[] {
+  const urls = getReadUrls(lang)
+  for (const item of getCachedUpdates()) {
+    if (item.read) urls.add(item.url)
+  }
+  return [...urls]
+}
+
+async function postSubscription(
+  prefs: AppPreferences,
+  subscription: PushSubscriptionJSON,
+) {
+  await fetch('/api/push/subscribe', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      subscription,
+      deviceId: getDeviceId(),
+      language: prefs.language,
+      categories: prefs.categories,
+      quietHoursEnabled: prefs.quietHoursEnabled,
+      quietStart: prefs.quietStart,
+      quietEnd: prefs.quietEnd,
+      frequency: prefs.frequency,
+      readUrls: currentReadUrls(prefs.language),
+    }),
+  })
+}
+
 export async function subscribeToPush(
   prefs: AppPreferences,
 ): Promise<PushSubscriptionJSON | null> {
@@ -34,20 +64,7 @@ export async function subscribeToPush(
     })
   }
   const json = sub.toJSON() as PushSubscriptionJSON
-  await fetch('/api/push/subscribe', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      subscription: json,
-      deviceId: getDeviceId(),
-      language: prefs.language,
-      categories: prefs.categories,
-      quietHoursEnabled: prefs.quietHoursEnabled,
-      quietStart: prefs.quietStart,
-      quietEnd: prefs.quietEnd,
-      frequency: prefs.frequency,
-    }),
-  })
+  await postSubscription(prefs, json)
   return json
 }
 
@@ -71,18 +88,33 @@ export async function syncPushPreferences(prefs: AppPreferences): Promise<void> 
   const reg = await navigator.serviceWorker.ready
   const sub = await reg.pushManager.getSubscription()
   if (!sub) return
-  await fetch('/api/push/subscribe', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      subscription: sub.toJSON(),
-      deviceId: getDeviceId(),
-      language: prefs.language,
-      categories: prefs.categories,
-      quietHoursEnabled: prefs.quietHoursEnabled,
-      quietStart: prefs.quietStart,
-      quietEnd: prefs.quietEnd,
-      frequency: prefs.frequency,
-    }),
-  })
+  await postSubscription(prefs, sub.toJSON() as PushSubscriptionJSON)
+}
+
+/** Tell the server these URLs are already read — skip Web Push for them. */
+export async function syncReadUrlsToServer(urls: string[]): Promise<void> {
+  if (!urls.length) return
+  let endpoint: string | undefined
+  try {
+    if ('serviceWorker' in navigator) {
+      const reg = await navigator.serviceWorker.ready
+      const sub = await reg.pushManager.getSubscription()
+      endpoint = sub?.endpoint
+    }
+  } catch {
+    // ignore
+  }
+  try {
+    await fetch('/api/mark-read', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        urls,
+        deviceId: getDeviceId(),
+        endpoint,
+      }),
+    })
+  } catch {
+    // offline — local suppress still applied
+  }
 }

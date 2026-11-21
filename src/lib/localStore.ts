@@ -2,6 +2,7 @@ import type { FetchLog, JwUpdate } from './types'
 import { loadPreferences } from './preferences'
 
 const READ_KEY = 'jw-hub-read-ids'
+const READ_URLS_KEY = 'jw-hub-read-urls-v2'
 const CACHE_KEY = 'jw-hub-updates-cache'
 const LOG_KEY = 'jw-hub-last-fetch'
 const SEEN_URLS_KEY = 'jw-hub-seen-urls-v2'
@@ -32,6 +33,28 @@ export function addReadIds(ids: string[]) {
   const next = getReadIds()
   for (const id of ids) next.add(id)
   localStorage.setItem(READ_KEY, JSON.stringify([...next]))
+}
+
+export function getReadUrls(lang = currentLang()): Set<string> {
+  const prefix = `${lang}::`
+  const urls = new Set<string>()
+  for (const key of readUrlSet(READ_URLS_KEY)) {
+    if (key.startsWith(prefix)) urls.add(key.slice(prefix.length))
+  }
+  // Also derive from cached items marked read
+  for (const item of getCachedUpdates()) {
+    if (item.read) urls.add(item.url)
+  }
+  return urls
+}
+
+export function addReadUrls(urls: string[], lang = currentLang()) {
+  const next = readUrlSet(READ_URLS_KEY)
+  for (const url of urls) next.add(langKey(url, lang))
+  writeUrlSet(READ_URLS_KEY, next)
+  // Marking read also suppresses future alerts for these URLs
+  markUrlsNotified(urls, lang)
+  markUrlsSeen(urls, lang)
 }
 
 export function applyReadState(updates: JwUpdate[]): JwUpdate[] {

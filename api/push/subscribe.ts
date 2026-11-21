@@ -6,14 +6,22 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS')
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type')
   if (req.method === 'OPTIONS') return res.status(204).end()
-  if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' })
+  if (req.method !== 'POST')
+    return res.status(405).json({ error: 'Method not allowed' })
 
   try {
     const body = req.body || {}
     const subscription = body.subscription
-    if (!subscription?.endpoint || !subscription?.keys?.p256dh || !subscription?.keys?.auth) {
+    if (
+      !subscription?.endpoint ||
+      !subscription?.keys?.p256dh ||
+      !subscription?.keys?.auth
+    ) {
       return res.status(400).json({ error: 'Invalid subscription' })
     }
+    const readUrls = Array.isArray(body.readUrls)
+      ? body.readUrls.filter((u: unknown) => typeof u === 'string' && u)
+      : []
     await upsertSubscription({
       endpoint: subscription.endpoint,
       subscription,
@@ -30,7 +38,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       quietHoursEnabled: Boolean(body.quietHoursEnabled),
       quietStart: String(body.quietStart || '22:00'),
       quietEnd: String(body.quietEnd || '07:00'),
-      frequency: body.frequency === 'hourly' || body.frequency === 'daily' ? body.frequency : 'instant',
+      frequency:
+        body.frequency === 'hourly' || body.frequency === 'daily'
+          ? body.frequency
+          : 'instant',
+      readUrls,
       updatedAt: new Date().toISOString(),
     })
     return res.status(200).json({ ok: true })

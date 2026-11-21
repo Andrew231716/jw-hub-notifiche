@@ -1,17 +1,21 @@
 import {
   addReadIds,
+  addReadUrls,
   applyReadState,
   cacheLastFetch,
   cacheUpdates,
   getCachedLastFetch,
   getCachedUpdates,
   getNotifiedUrls,
+  getReadIds,
+  getReadUrls,
   getSeenUrls,
   markUrlsNotified,
   markUrlsSeen,
   mergeWithCache,
 } from './localStore'
 import { loadPreferences } from './preferences'
+import { syncReadUrlsToServer } from './push'
 import { supabase, supabaseConfigured } from './supabase'
 import type { FetchLog, FetchResult, JwUpdate } from './types'
 
@@ -108,21 +112,18 @@ async function localFetchUpdates(): Promise<
 
 async function localMarkRead(ids: string[]): Promise<void> {
   addReadIds(ids)
-  const cached = applyReadState(
-    getCachedUpdates().map((item) =>
-      ids.includes(item.id) ? { ...item, read: true } : item,
+  const idSet = new Set(ids)
+  const cached = getCachedUpdates()
+  const urls = cached.filter((item) => idSet.has(item.id)).map((item) => item.url)
+  addReadUrls(urls)
+  cacheUpdates(
+    applyReadState(
+      cached.map((item) =>
+        idSet.has(item.id) ? { ...item, read: true } : item,
+      ),
     ),
   )
-  cacheUpdates(cached)
-  try {
-    await fetch('/api/mark-read', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ ids }),
-    })
-  } catch {
-    // localStorage already updated
-  }
+  await syncReadUrlsToServer(urls)
 }
 
 async function supabaseGetUpdates(): Promise<{
@@ -184,6 +185,12 @@ async function supabaseMarkRead(ids: string[]): Promise<void> {
   } else {
     await client.from('jw_updates').update({ read: true }).in('id', ids)
   }
+  const idSet = new Set(ids)
+  const urls = getCachedUpdates()
+    .filter((item) => idSet.has(item.id))
+    .map((item) => item.url)
+  addReadUrls(urls)
+  await syncReadUrlsToServer(urls)
 }
 
 export const usingSupabase = supabaseConfigured
@@ -201,10 +208,18 @@ export async function markItemsRead(ids: string[]): Promise<void> {
   return usingSupabase ? supabaseMarkRead(ids) : localMarkRead(ids)
 }
 
-/** Notify only for brand-new items not already alerted on this device. */
+/** Notify only for brand-new items not already alerted or marked read. */
 export function takeNotifiableNewItems(newItems: JwUpdate[]): JwUpdate[] {
-  const already = getNotifiedUrls()
-  const fresh = newItems.filter((item) => !already.has(item.url))
+  const alreadyNotified = getNotifiedUrls()
+  const alreadyRead = getReadUrls()
+  const readIds = getReadIds()
+  const fresh = newItems.filter(
+    (item) =>
+      !item.read &&
+      !readIds.has(item.id) &&
+      !alreadyRead.has(item.url) &&
+      !alreadyNotified.has(item.url),
+  )
   if (fresh.length) markUrlsNotified(fresh.map((item) => item.url))
   return fresh
 }
